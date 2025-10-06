@@ -1,0 +1,165 @@
+From 8637cac022907501c3c0d941e07e436b70c9d4ac Mon Sep 17 00:00:00 2001
+From: Miod Vallat <118974489+dustanddreams@users.noreply.github.com>
+Date: Thu, 30 May 2024 09:57:41 +0000
+Subject: [PATCH 6/7] Reload exception pointer register in caml_c_call*
+
+The invoked code may end up causing caml_try_realloc_stack() to be invoked,
+which in turn may replace the stack TRAP_PTR points to, leading to
+either crashes with the debug runtime (thanks to the old stack contents
+being overwritten) or all kinds of memory or control flow corruption otherwise.
+
+Added test for stack reallocation in callback followed by exception raising.
+
+(cherry picked from commit 6964d3a90f84402ed6066fb1821679435e063067)
+(cherry picked from commit 1e8a91d305f1fa4668444fb1cce97952dbc39810)
+---
+ Changes                           | 9 +++++++++
+ runtime/arm64.S                   | 6 ++++--
+ runtime/power.S                   | 6 ++++--
+ runtime/riscv.S                   | 6 ++++--
+ runtime/s390x.S                   | 5 +++--
+ testsuite/tests/callback/test1.ml | 5 +++++
+ 6 files changed, 29 insertions(+), 8 deletions(-)
+
+diff --git a/Changes b/Changes
+index d26512067d..53bb5369b9 100644
+--- a/Changes
++++ b/Changes
+@@ -1,3 +1,12 @@
++OCaml 5.2 maintenance version
++-----------------------------
++
++- #13207: Be sure to reload the register caching the exception handler in
++  caml_c_call and caml_c_call_stack_args, as its value may have been changed
++  if the OCaml stack is expanded during a callback.
++  (Miod Vallat, report by Vesa Karvonen, review by Gabriel Scherer and
++   Xavier Leroy)
++
+ OCaml 5.2.0 (13 May 2024)
+ -------------------------
+ 
+diff --git a/runtime/arm64.S b/runtime/arm64.S
+index e71f25ebba..6c6495a0a8 100644
+--- a/runtime/arm64.S
++++ b/runtime/arm64.S
+@@ -569,8 +569,9 @@ FUNCTION(caml_c_call)
+         str     TRAP_PTR, Caml_state(exn_handler)
+     /* Call the function */
+         blr     ADDITIONAL_ARG
+-    /* Reload alloc ptr  */
++    /* Reload new allocation pointer & exn handler */
+         ldr     ALLOC_PTR, Caml_state(young_ptr)
++        ldr     TRAP_PTR, Caml_state(exn_handler)
+     /* Load ocaml stack */
+         SWITCH_C_TO_OCAML
+ #if defined(WITH_THREAD_SANITIZER)
+@@ -625,8 +626,9 @@ FUNCTION(caml_c_call_stack_args)
+         blr     ADDITIONAL_ARG
+     /* Restore stack */
+         mov     sp, x19
+-    /* Reload alloc ptr */
++    /* Reload new allocation pointer & exn handler */
+         ldr     ALLOC_PTR, Caml_state(young_ptr)
++        ldr     TRAP_PTR, Caml_state(exn_handler)
+     /* Switch from C to OCaml */
+         SWITCH_C_TO_OCAML
+     /* Return */
+diff --git a/runtime/power.S b/runtime/power.S
+index bfb37fa989..257678100e 100644
+--- a/runtime/power.S
++++ b/runtime/power.S
+@@ -445,8 +445,9 @@ FUNCTION caml_c_call
+         mr      2, C_CALL_TOC   /* restore current TOC */
+     /* Restore return address (in register C_CALL_RET_ADDR, preserved by C) */
+         mtlr    C_CALL_RET_ADDR
+-    /* Reload allocation pointer*/
++    /* Reload new allocation pointer and exception pointer */
+         ld      ALLOC_PTR, Caml_state(young_ptr)
++        ld      TRAP_PTR, Caml_state(exn_handler)
+ #if defined(WITH_THREAD_SANITIZER)
+         TSAN_SETUP_C_CALL 16
+     /* Save return value registers. Since the called function could be anything,
+@@ -497,8 +498,9 @@ FUNCTION caml_c_call_stack_args
+         add     SP, SP, STACK_ARG_BYTES
+     /* Restore return address (in register C_CALL_RET_ADDR, preserved by C) */
+         mtlr    C_CALL_RET_ADDR
+-    /* Reload allocation pointer*/
++    /* Reload new allocation pointer and exception pointer */
+         ld      ALLOC_PTR, Caml_state(young_ptr)
++        ld      TRAP_PTR, Caml_state(exn_handler)
+     /* Switch from C to OCaml */
+         SWITCH_C_TO_OCAML
+     /* Return to caller */
+diff --git a/runtime/riscv.S b/runtime/riscv.S
+index a2eca7a315..8934db0bb3 100644
+--- a/runtime/riscv.S
++++ b/runtime/riscv.S
+@@ -516,8 +516,9 @@ L(caml_c_call):
+         sd      TRAP_PTR, Caml_state(exn_handler)
+     /* Call the function */
+         jalr    ADDITIONAL_ARG
+-    /* Reload alloc ptr */
++    /* Reload new allocation pointer & exn handler */
+         ld      ALLOC_PTR, Caml_state(young_ptr)
++        ld      TRAP_PTR, Caml_state(exn_handler)
+     /* Load ocaml stack */
+         SWITCH_C_TO_OCAML
+ #if defined(WITH_THREAD_SANITIZER)
+@@ -575,8 +576,9 @@ FUNCTION(caml_c_call_stack_args)
+         jalr    ADDITIONAL_ARG
+     /* Restore stack */
+         mv      sp, s2
+-    /* Reload alloc ptr */
++    /* Reload new allocation pointer & exn handler */
+         ld      ALLOC_PTR, Caml_state(young_ptr)
++        ld      TRAP_PTR, Caml_state(exn_handler)
+     /* Switch from C to OCaml */
+         SWITCH_C_TO_OCAML
+     /* Return */
+diff --git a/runtime/s390x.S b/runtime/s390x.S
+index b59822ce57..113831a376 100644
+--- a/runtime/s390x.S
++++ b/runtime/s390x.S
+@@ -515,7 +515,7 @@ LBL(caml_c_call):
+ #endif
+         basr    %r14, ADDITIONAL_ARG
+         CLEANUP_AFTER_C_CALL
+-    /* Reload alloc ptr  */
++    /* Reload new allocation pointer & exn handler */
+         lg      ALLOC_PTR, Caml_state(young_ptr)
+         lg      TRAP_PTR, Caml_state(exn_handler)
+     /* Load ocaml stack and restore global variables */
+@@ -584,8 +584,9 @@ LBL(106):
+         CLEANUP_AFTER_C_CALL
+     /* Restore stack */
+         lgr     %r15, %r12
+-    /* Reload alloc ptr */
++    /* Reload new allocation pointer & exn handler */
+         lg      ALLOC_PTR, Caml_state(young_ptr)
++        lg      TRAP_PTR, Caml_state(exn_handler)
+     /* Switch from C to OCaml */
+         SWITCH_C_TO_OCAML
+     /* Return */
+diff --git a/testsuite/tests/callback/test1.ml b/testsuite/tests/callback/test1.ml
+index c39be0c586..f6ad4356cf 100644
+--- a/testsuite/tests/callback/test1.ml
++++ b/testsuite/tests/callback/test1.ml
+@@ -11,6 +11,9 @@ external mycallback3 : ('a -> 'b -> 'c -> 'd) -> 'a -> 'b -> 'c -> 'd
+ external mycallback4 :
+     ('a -> 'b -> 'c -> 'd -> 'e) -> 'a -> 'b -> 'c -> 'd -> 'e = "mycallback4"
+ 
++let rec growstack n =
++  if n <= 0 then 0 else 1 + growstack (n - 1)
++
+ let rec tak (x, y, z as _tuple) =
+   if x > y then tak(tak (x-1, y, z), tak (y-1, z, x), tak (z-1, x, y))
+            else z
+@@ -46,3 +49,5 @@ let _ =
+   print_int(trapexit ()); print_newline();
+   print_string(tripwire mypushroot); print_newline();
+   print_string(tripwire mycamlparam); print_newline();
++  begin try ignore (mycallback1 growstack 1_000); raise Exit
++  with Exit -> () end
+-- 
+2.44.0
+
