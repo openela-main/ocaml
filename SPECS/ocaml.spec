@@ -44,7 +44,7 @@ ExcludeArch: %{ix86}
 
 Name:           ocaml
 Version:        5.2.0
-Release:        4%{?dist}
+Release:        5%{?dist}
 
 Summary:        OCaml compiler and programming environment
 
@@ -93,6 +93,10 @@ Patch:          0006-Reload-exception-pointer-register-in-caml_c_call.patch
 # https://github.com/ocaml/ocaml/issues/13220
 # https://github.com/ocaml/ocaml/commit/114ddae2d4c85391a4f939dc6623424ae35a07aa
 Patch:          0007-Compute-more-accurate-instruction-sizes-for-branch-r.patch
+
+# Fix for CVE-2026-28364
+Patch:          0001-Fix-memory-corruption-when-an-exception-is-raised-du.patch
+Patch:          0002-robustify-intern.c.patch
 
 BuildRequires:  make
 BuildRequires:  git
@@ -480,6 +484,11 @@ hardlink -t $RPM_BUILD_ROOT%{_libdir}/ocaml/stublibs
 
 
 %changelog
+* Mon Mar  2 2026 Richard W.M. Jones <rjones@redhat.com> - 5.2.0-5
+- Fix remote code execution via buffer over-read in Marshal deserialization
+  CVE-2026-28364
+  Resolves: RHEL-152488
+
 * Tue Oct 29 2024 Troy Dawson <tdawson@redhat.com> - 5.2.0-4
 - Bump release for October 2024 mass rebuild:
   Resolves: RHEL-64018

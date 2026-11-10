@@ -1,0 +1,74 @@
+From 69c9446c1ea571577cf5e09d38bb9ba6abb10f79 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Beno=C3=AEt=20Vaugon?= <benoit.vaugon@gmail.com>
+Date: Tue, 6 May 2025 11:27:24 +0200
+Subject: [PATCH 1/2] Fix memory corruption when an exception is raised during
+ demarshaling. (#14015)
+
+(cherry picked from commit e6321cf1e3f3bfb0795108ab4d6c66c559ea9b63)
+(cherry picked from commit 4a3eb26c902ef1d3378c40c7299ef346862afa92)
+---
+ runtime/intern.c | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/runtime/intern.c b/runtime/intern.c
+index 2be12e3479..f52ac51a6c 100644
+--- a/runtime/intern.c
++++ b/runtime/intern.c
+@@ -856,7 +856,6 @@ value caml_input_val(struct channel *chan)
+   char header[MAX_INTEXT_HEADER_SIZE];
+   struct marshal_header h;
+   char * block;
+-  value res;
+   struct caml_intern_state* s = init_intern_state ();
+ 
+   if (! caml_channel_binary_mode(chan))
+@@ -901,9 +900,10 @@ value caml_input_val(struct channel *chan)
+   intern_init(s, block, block);
+   intern_decompress_input(s, "input_value", &h);
+   intern_alloc_storage(s, h.whsize, h.num_objects);
+-  /* Fill it in */
+-  intern_rec(s, "input_value", &res);
+-  return intern_end(s, res);
++  /* Fill it in - obj must NOT be registered as a GC root */
++  value obj;
++  intern_rec(s, "input_value", &obj);
++  return intern_end(s, obj);
+ }
+ 
+ CAMLprim value caml_input_value(value vchan)
+@@ -929,7 +929,6 @@ CAMLprim value caml_input_value_to_outside_heap(value vchan)
+ CAMLexport value caml_input_val_from_bytes(value str, intnat ofs)
+ {
+   CAMLparam1 (str);
+-  CAMLlocal1 (obj);
+   struct marshal_header h;
+   struct caml_intern_state* s = init_intern_state ();
+ 
+@@ -943,7 +942,8 @@ CAMLexport value caml_input_val_from_bytes(value str, intnat ofs)
+   s->intern_src = &Byte_u(str, ofs + h.header_len); /* If a GC occurred */
+   /* Decompress if needed */
+   intern_decompress_input(s, "input_val_from_string", &h);
+-  /* Fill it in */
++  /* Fill it in - obj must NOT be registered as a GC root */
++  value obj;
+   intern_rec(s, "input_val_from_string", &obj);
+   CAMLreturn (intern_end(s, obj));
+ }
+@@ -956,12 +956,12 @@ CAMLprim value caml_input_value_from_bytes(value str, value ofs)
+ static value input_val_from_block(struct caml_intern_state* s,
+                                   struct marshal_header * h)
+ {
+-  value obj;
+   /* Decompress if needed */
+   intern_decompress_input(s, "input_val_from_block", h);
+   /* Allocate result */
+   intern_alloc_storage(s, h->whsize, h->num_objects);
+-  /* Fill it in */
++  /* Fill it in - obj must NOT be registered as a GC root */
++  value obj;
+   intern_rec(s, "input_val_from_block", &obj);
+   return (intern_end(s, obj));
+ }
+-- 
+2.52.0
+
